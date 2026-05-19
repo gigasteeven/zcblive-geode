@@ -406,9 +406,9 @@ impl Config {
 }
 
 #[derive(Default, Clone, Copy)]
-struct ClickTime {
-    time: f64,
-    typ: ClickType,
+pub struct ClickTime {
+    pub time: f64,
+    pub typ: ClickType,
 }
 
 #[derive(Default)]
@@ -487,6 +487,10 @@ pub struct Bot {
     pub dead_timer: f32,
     pub dead_timer_limit: f32,
     pub devices: Arc<Mutex<Vec<String>>>,
+    /// Independent click-timing state for the "extra keys" hook
+    /// (ESC/TAB/4/R/T/ENTER) so it does not interfere with the jump button
+    /// timing tracked in `prev_times`.
+    pub extra_key_prev_time: ClickTime,
 }
 
 impl Default for Bot {
@@ -528,6 +532,7 @@ impl Default for Bot {
             dead_timer: f32::NAN,
             dead_timer_limit: 0.0,
             devices: Arc::new(Mutex::new(vec![])),
+            extra_key_prev_time: ClickTime::default(),
         }
     }
 }
@@ -1057,6 +1062,103 @@ impl Bot {
             },
             self.conf.decouple_platformer,
         );
+        self.prev_pitch = pitch;
+    }
+
+    /// Play a click sound for an "extra" key (ESC/TAB/4/R/T/ENTER on Geode).
+    ///
+    /// Uses the Jump click pool but tracks its own previous-time so it does
+    /// not interfere with the jump-button timing chain. Not gated by
+    /// `is_in_level` — these keys produce click feedback wherever the bot
+    /// is enabled and a clickpack is loaded.
+    pub unsafe fn on_extra_key_action(&mut self, push: bool) {
+        if self.clickpack.num_sounds == 0 || !self.conf.enabled {
+            return;
+        }
+
+        let now = self.time();
+        if now == 0.0 {
+            return;
+        }
+        let prev_time = self.extra_key_prev_time;
+        let dt = (now - prev_time.time).abs();
+        let click_type = ClickType::from_time(push, dt, &self.conf.timings);
+        if self.conf.ignored_click_types.is_ignored(click_type) {
+            return;
+        }
+        let use_fmod = self.conf.use_fmod;
+
+        // Use the Jump click pool (player 1 only — extra keys are not
+        // tied to either player in the gameplay sense).
+        let mut click = self
+            .clickpack
+            .get_random_click(click_type, false, Button::Jump)
+            .clone();
+        let pitch = self.get_pitch() * self.conf.click_speedhack;
+        if !use_fmod {
+            click.set_playback_rate(PlaybackRate::Factor(pitch));
+        }
+
+        // Compute volume, matching `on_action` behaviour as closely as
+        // possible so extra-key clicks feel consistent with jump clicks.
+        let volume = {
+            let vol = &self.conf.volume_settings;
+            let mut volume = 1.0;
+            if vol.volume_var != 0.0 {
+                volume += utils::f64_range(-vol.volume_var..=vol.volume_var);
+            }
+            if (push || vol.change_releases_volume) && dt < vol.spam_time && vol.enabled {
+                let offset = (vol.spam_time - dt) * vol.spam_vol_offset_factor;
+                self.prev_spam_offset = offset;
+                volume -= offset.min(vol.max_spam_vol_offset);
+            } else {
+                self.prev_spam_offset = 0.0;
+            }
+            volume *= vol.global_volume;
+            if !use_fmod {
+                click.set_volume(volume as f32);
+            }
+            self.prev_volume = volume;
+            volume
+        };
+
+        // Cut previously playing sounds, same heuristic as `on_action`.
+        if !use_fmod
+            && self.conf.cut_sounds
+            && (!click_type.is_release() || self.conf.cut_by_releases)
+        {
+            for sound in &self.mixer.renderer.guard().sounds {
+                let sound_len = sound.guard().frames.len();
+                if let Some(noise_sound) = &self.noise_sound {
+                    if noise_sound.guard().frames.len() == sound_len {
+                        continue;
+                    }
+                }
+                sound.seek_to_end();
+            }
+        }
+
+        if !use_fmod {
+            self.mixer.play(click.sound);
+        } else {
+            unsafe {
+                FMOD_System_PlaySound(
+                    *self.system,
+                    click.fmod_sound,
+                    std::ptr::null_mut(),
+                    0,
+                    &mut self.channel,
+                );
+                FMOD_Channel_SetPitch(self.channel, pitch as f32);
+                FMOD_Channel_SetVolume(self.channel, volume as f32);
+                FMOD_System_Update(*self.system);
+            }
+        }
+
+        self.extra_key_prev_time = ClickTime {
+            time: now,
+            typ: click_type,
+        };
         self.prev_pitch = pitch;
     }
 
