@@ -222,6 +222,14 @@ unsafe extern "C" fn zcblive_on_action(button: u8, player2: bool, push: bool) {
     BOT.on_action(Button::from_u8(button), player2, push);
 }
 
+/// Play a click sound for an "extra" key (ESC/TAB/4/R/T/ENTER) hooked on
+/// the C++/Geode side. Uses the Jump click pool with independent timing
+/// state so it does not interfere with the actual jump-button click chain.
+#[no_mangle]
+unsafe extern "C" fn zcblive_on_extra_key(push: bool) {
+    BOT.on_extra_key_action(push);
+}
+
 /// optional implementation
 #[no_mangle]
 unsafe extern "C" fn zcblive_on_reset() {

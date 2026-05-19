@@ -1,6 +1,7 @@
 #include "fmod.h"
 #include <Geode/Geode.hpp>
 #include <Geode/modify/CCEGLView.hpp>
+#include <Geode/modify/CCKeyboardDispatcher.hpp>
 #include <Geode/modify/GJBaseGameLayer.hpp>
 #include <Geode/modify/LevelEditorLayer.hpp>
 #include <Geode/modify/PlayLayer.hpp>
@@ -46,6 +47,7 @@ void zcblive_on_wgl_swap_buffers(HDC hdc);
 void zcblive_initialize();
 void zcblive_uninitialize();
 void zcblive_on_action(uint8_t button, bool player2, bool push);
+void zcblive_on_extra_key(bool push);
 void zcblive_on_reset();
 void zcblive_set_is_in_level(bool is_in_level);
 void zcblive_set_playlayer_time(double time);
@@ -212,6 +214,29 @@ class $modify(LevelEditorLayer) {
 	bool init(GJGameLevel* level, bool something) {
 		zcblive_on_init(nullptr);
 		return LevelEditorLayer::init(level, something);
+	}
+};
+
+// Forward extra non-jump keys (ESC, TAB, 4, R, T, ENTER) to the bot so they
+// trigger the same click sound mechanism as the jump button. Other keys are
+// left completely untouched.
+class $modify(CCKeyboardDispatcher) {
+	bool dispatchKeyboardMSG(cocos2d::enumKeyCodes key, bool isKeyDown, bool isKeyRepeat, double timestamp) {
+		if (!isKeyRepeat) {
+			switch (key) {
+				case cocos2d::KEY_Escape:
+				case cocos2d::KEY_Tab:
+				case cocos2d::KEY_Four:
+				case cocos2d::KEY_R:
+				case cocos2d::KEY_T:
+				case cocos2d::KEY_Enter:
+					zcblive_on_extra_key(isKeyDown);
+					break;
+				default:
+					break;
+			}
+		}
+		return CCKeyboardDispatcher::dispatchKeyboardMSG(key, isKeyDown, isKeyRepeat, timestamp);
 	}
 };
 // clang-format on
